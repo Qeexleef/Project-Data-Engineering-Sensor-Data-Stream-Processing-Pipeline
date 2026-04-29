@@ -67,6 +67,9 @@ Kafka provides fault tolerance by storing records persistently and replicating t
 ## How to run the project
 
 ```bash
+git clone https://github.com/Qeexleef/Project-Data-Engineering-Sensor-Data-Stream-Processing-Pipeline.git
+cd Project-Data-Engineering-Sensor-Data-Stream-Processing-Pipeline/
+
 # login with your (free) Docker account to pull hardened Kafka image from dhi.io
 podman login dhi.io
 
