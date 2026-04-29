@@ -1,0 +1,3 @@
+FROM docker.io/python:3
+RUN pip install kafka-python
+RUN pip install psycopg2 sqlparse

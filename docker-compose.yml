@@ -1,0 +1,184 @@
+services:
+  kafka:
+    image: dhi.io/kafka:4
+    container_name: kafka
+    ports:
+      - "9092:9092"
+    restart: always
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_PROCESS_ROLES: broker,controller
+    volumes:
+      - kafka-data:/opt/kafka/logs
+
+  # Service to create topics
+  init_kafka:
+    build: ./kafka
+    depends_on:
+      - kafka
+    command: [ "python", "/init.py" ]
+    restart: on-failure
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_TOPICS: weather_forecast,weather,air_quality
+    volumes:
+      - ./kafka/init.py:/init.py
+
+  # PostgreSQL DB to store weather and air quality measurements
+  postgres:
+    image: docker.io/postgres:18
+    container_name: postgres
+    ports:
+      - "5432:5432"
+    restart: always
+    environment:
+      POSTGRES_USER: demo
+      POSTGRES_PASSWORD: demo123
+    volumes:
+      - postgres_data:/var/lib/postgresql
+
+  # Service to init postgreSQL DB
+  init_postgres:
+    build: ./postgres
+    depends_on:
+      - postgres
+    command: [ "python", "/init.py" ]
+    restart: on-failure
+    environment:
+      POSTGRES_URL: postgresql://demo:demo123@postgres:5432/demo
+    volumes:
+      - ./postgres/init.py:/init.py
+      - ./postgres/create_tables.sql:/create_tables.sql
+
+  # Mongo DB to track weather forecasts and warnings in JSON format
+  mongodb:
+    image: docker.io/mongo:8
+    container_name: mongodb
+    ports:
+      - "27017:27017"
+    restart: always
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: demo
+      MONGO_INITDB_ROOT_PASSWORD: demo123
+    volumes:
+      - mongodb-data:/data/db
+
+  # Service to init mongodb
+  init_mongodb:
+    build: ./mongodb
+    depends_on:
+      - mongodb
+    command: [ "python", "/init.py" ]
+    restart: on-failure
+    environment:
+      MONGODB_URL: mongodb://demo:demo123@mongodb:27017/admin
+      MONGO_DATABASE: forecasts
+      MONGO_COLLECTION: daily_weather
+    volumes:
+      - ./mongodb/init.py:/init.py
+
+  # Consumer services
+  forecast_consumer:
+    build: ./consumer/forecast_consumer
+    depends_on:
+      init_kafka:
+        condition: service_completed_successfully
+      init_mongodb:
+        condition: service_completed_successfully
+    command: [ "python", "/forecast_consumer.py" ]
+    restart: on-failure
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_TOPIC: weather_forecast
+      MONGODB_URL: mongodb://demo:demo123@mongodb:27017/admin
+      MONGO_DATABASE: forecasts
+      MONGO_COLLECTION: daily_weather
+    volumes:
+      - ./consumer/forecast_consumer.py:/forecast_consumer.py
+
+  sensor_data_consumer1:
+    build: ./consumer/sensor_data_consumer
+    depends_on:
+      init_kafka:
+        condition: service_completed_successfully
+      init_postgres:
+        condition: service_completed_successfully
+    command: [ "python", "/sensor_data_consumer.py" ]
+    restart: always
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_TOPIC: weather
+      POSTGRES_URL: postgresql://demo:demo123@postgres:5432/demo
+    volumes:
+      - ./consumer/sensor_data_consumer.py:/sensor_data_consumer.py
+
+  sensor_data_consumer2:
+    build: ./consumer/sensor_data_consumer
+    depends_on:
+      init_kafka:
+        condition: service_completed_successfully
+      init_postgres:
+        condition: service_completed_successfully
+    command: [ "python", "/sensor_data_consumer.py" ]
+    restart: always
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_TOPIC: air_quality
+      POSTGRES_URL: postgresql://demo:demo123@postgres:5432/demo
+    volumes:
+      - ./consumer/sensor_data_consumer.py:/sensor_data_consumer.py
+
+  # Producer services
+  sensor_data_producer:
+    build: ./producer/sensor_data_producer
+    container_name: sensor_data_producer
+    ports:
+      - "8080:8080"
+    depends_on:
+      init_kafka:
+        condition: service_completed_successfully
+    command: uvicorn sensor_data_producer:app --host 0.0.0.0 --port 8080
+    restart: always
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_TOPICS: weather,air_quality
+    volumes:
+      - ./producer/sensor_data_producer.py:/sensor_data_producer.py
+      - ./producer/sensor_data_producer/schemas.py:/schemas.py
+
+  forecast_producer:
+    build: ./producer/forecast_producer
+    depends_on:
+      init_kafka:
+        condition: service_completed_successfully
+    command: [ "python", "/forecast_producer.py" ]
+    restart: always
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_TOPIC: weather_forecast
+    volumes:
+      - ./producer/forecast_producer.py:/forecast_producer.py
+      - ./utils/dwd_warnings.py:/dwd_warnings.py
+      - ./locations.csv:/locations.csv
+
+  # Sensor data stream simulator
+  sensor_stream_simulator:
+    build: ./simulators
+    depends_on:
+      - sensor_data_producer
+    command: [ "python", "/sensor_stream_simulator.py" ]
+    restart: always
+    environment:
+      PRODUCER_URL: http://sensor_data_producer:8080/
+    volumes:
+      - ./simulators/sensor_stream_simulator.py:/sensor_stream_simulator.py
+      - ./locations.csv:/locations.csv
+
+volumes:
+  kafka-data:
+  postgres_data:
+  mongodb-data:
